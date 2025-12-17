@@ -1,21 +1,18 @@
 import { z } from "zod";
 import { adminProcedure, publicProcedure, router } from "../api/trpc";
 import {
+  createQuiz,
+  createQuizQuestion,
   getActiveQuiz,
-  getQuizById,
   getAllQuizzes,
+  getQuizById,
   getQuizWithQuestions,
   getScoringConfigForQuiz,
-  getDb,
   ensureBaselineQuizQuestions,
+  updateQuizById,
+  updateQuizQuestionById,
+  deleteQuizQuestionById,
 } from "../db";
-import {
-  quizzes,
-  quizQuestions,
-  quizQuestionOptions,
-  quizScoringConfig,
-} from "../../drizzle/schema";
-import { eq } from "drizzle-orm";
 
 export const quizzesRouter = router({
   /**
@@ -63,18 +60,13 @@ export const quizzesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) throw new Error("Database not available");
-
-      const result = await db.insert(quizzes).values({
+      const quiz = await createQuiz({
         name: input.name,
         description: input.description,
         isActive: input.isActive,
         createdBy: ctx.user!.id,
       });
-
-      const quizId = result[0].insertId as number;
-      return await getQuizById(quizId);
+      return quiz;
     }),
 
   /**
@@ -90,21 +82,15 @@ export const quizzesRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new Error("Database not available");
-
       const updateData: any = {};
       if (input.name !== undefined) updateData.name = input.name;
       if (input.description !== undefined)
         updateData.description = input.description;
       if (input.isActive !== undefined) updateData.isActive = input.isActive;
 
-      await db
-        .update(quizzes)
-        .set(updateData)
-        .where(eq(quizzes.id, input.quizId));
-
-      return await getQuizById(input.quizId);
+      const updated = await updateQuizById(input.quizId, updateData);
+      if (!updated) throw new Error("Quiz não encontrado");
+      return updated;
     }),
 
   /**
@@ -122,25 +108,13 @@ export const quizzesRouter = router({
         })
       )
       .mutation(async ({ input }) => {
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-
-        const result = await db.insert(quizQuestions).values({
+        return await createQuizQuestion({
           quizId: input.quizId,
           text: input.text,
           questionType: input.questionType,
           weight: input.weight.toString(),
           order: input.order,
         });
-
-        const questionId = result[0].insertId as number;
-        const question = await db
-          .select()
-          .from(quizQuestions)
-          .where(eq(quizQuestions.id, questionId))
-          .limit(1);
-
-        return question[0];
       }),
 
     /**
@@ -156,27 +130,15 @@ export const quizzesRouter = router({
         })
       )
       .mutation(async ({ input }) => {
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-
         const updateData: any = {};
         if (input.text !== undefined) updateData.text = input.text;
         if (input.weight !== undefined)
           updateData.weight = input.weight.toString();
         if (input.order !== undefined) updateData.order = input.order;
 
-        await db
-          .update(quizQuestions)
-          .set(updateData)
-          .where(eq(quizQuestions.id, input.questionId));
-
-        const question = await db
-          .select()
-          .from(quizQuestions)
-          .where(eq(quizQuestions.id, input.questionId))
-          .limit(1);
-
-        return question[0];
+        const updated = await updateQuizQuestionById(input.questionId, updateData);
+        if (!updated) throw new Error("Questão não encontrada");
+        return updated;
       }),
 
     /**
@@ -185,20 +147,8 @@ export const quizzesRouter = router({
     delete: adminProcedure
       .input(z.object({ questionId: z.number() }))
       .mutation(async ({ input }) => {
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-
-        // Delete related options first
-        await db
-          .delete(quizQuestionOptions)
-          .where(eq(quizQuestionOptions.questionId, input.questionId));
-
-        // Delete the question
-        await db
-          .delete(quizQuestions)
-          .where(eq(quizQuestions.id, input.questionId));
-
-        return { success: true };
+        await deleteQuizQuestionById(input.questionId);
+        return { success: true } as const;
       }),
   }),
 });

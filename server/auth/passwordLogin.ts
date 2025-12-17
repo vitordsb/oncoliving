@@ -1,10 +1,8 @@
-import { COOKIE_NAME, ONE_YEAR_MS } from "../../shared/const";
 import type { Express, Request, Response } from "express";
 import { randomBytes, pbkdf2Sync, timingSafeEqual } from "crypto";
 import * as db from "../db";
-import { users } from "../../drizzle/schema";
-import { getSessionCookieOptions } from "../config/cookies";
-import { sdk } from "../services/auth";
+import { signAuthToken } from "./jwt";
+import { ONE_YEAR_MS } from "../../shared/const";
 
 const MIN_PASSWORD_LEN = 6;
 
@@ -37,20 +35,16 @@ export function registerPasswordAuthRoutes(app: Express) {
     const existing = await db.getUserByEmail(adminEmail);
     if (!existing) {
       const passwordHash = hashPassword(adminPassword);
-      const dbConn = await db.getDb();
-      if (dbConn) {
-      await dbConn.insert(users).values({
+      await db.createUser({
         openId: adminEmail,
         email: adminEmail,
         name: "Admin OncoLiving",
+        passwordHash,
         role: "ONCOLOGIST",
+        loginMethod: "password",
         hasActivePlan: true,
         hasCompletedAnamnesis: true,
-        passwordHash,
-        loginMethod: "password",
-        lastSignedIn: new Date(),
       });
-      }
     }
   };
   ensureAdmin().catch(err => console.error("[Auth] Falha ao garantir admin padrão", err));
@@ -90,21 +84,15 @@ export function registerPasswordAuthRoutes(app: Express) {
         return res.status(409).json({ error: "Usuário já existe" });
       }
 
-      const dbConn = await db.getDb();
-      if (!dbConn) {
-        return res.status(500).json({ error: "Banco de dados indisponível" });
-      }
-
-      await dbConn.insert(users).values({
+      await db.createUser({
         openId: normalizedEmail,
         email: normalizedEmail,
         name: displayName,
+        passwordHash,
         role: userRole,
+        loginMethod: "password",
         hasActivePlan,
         hasCompletedAnamnesis: false,
-        passwordHash,
-        loginMethod: "password",
-        lastSignedIn: new Date(),
       });
 
       return res.status(201).json({ success: true, needsLogin: true });
@@ -128,14 +116,14 @@ export function registerPasswordAuthRoutes(app: Express) {
         return res.status(401).json({ error: "Credenciais inválidas" });
       }
 
-      const sessionToken = await sdk.createSessionToken(user.openId, {
-        name: user.name || user.email || "Usuário",
-        expiresInMs: ONE_YEAR_MS,
-      });
+      await db.updateUserById(user.id, { lastSignedIn: new Date() });
 
-      const cookieOptions = getSessionCookieOptions(req);
-      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
-      return res.status(200).json({ success: true });
+      const token = await signAuthToken(
+        { openId: user.openId },
+        { expiresInMs: ONE_YEAR_MS }
+      );
+
+      return res.status(200).json({ success: true, token });
     } catch (error) {
       console.error("[Auth] Login falhou", error);
       return res.status(500).json({ error: "Falha ao autenticar" });

@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { adminProcedure, publicProcedure, router } from "../api/trpc";
 import {
+  createExerciseTutorial,
   getAllExercises,
   getExercisesByIntensity,
-  getDb,
+  updateExerciseTutorialById,
+  deleteExerciseTutorialById,
 } from "../db";
-import { exerciseTutorials } from "../../drizzle/schema";
-import { eq } from "drizzle-orm";
 
 export const exercisesRouter = router({
   /**
@@ -43,25 +43,13 @@ export const exercisesRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new Error("Database not available");
-
-      const result = await db.insert(exerciseTutorials).values({
+      return await createExerciseTutorial({
         name: input.name,
-        description: input.description,
+        description: input.description ?? null,
         intensityLevel: input.intensityLevel,
-        safetyGuidelines: input.safetyGuidelines,
-        videoLink: input.videoLink,
+        safetyGuidelines: input.safetyGuidelines ?? null,
+        videoLink: input.videoLink ?? null,
       });
-
-      const exerciseId = result[0].insertId as number;
-      const exercise = await db
-        .select()
-        .from(exerciseTutorials)
-        .where(eq(exerciseTutorials.id, exerciseId))
-        .limit(1);
-
-      return exercise[0];
     }),
 
   /**
@@ -79,9 +67,6 @@ export const exercisesRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new Error("Database not available");
-
       const updateData: any = {};
       if (input.name !== undefined) updateData.name = input.name;
       if (input.description !== undefined)
@@ -92,18 +77,9 @@ export const exercisesRouter = router({
         updateData.safetyGuidelines = input.safetyGuidelines;
       if (input.videoLink !== undefined) updateData.videoLink = input.videoLink;
 
-      await db
-        .update(exerciseTutorials)
-        .set(updateData)
-        .where(eq(exerciseTutorials.id, input.exerciseId));
-
-      const exercise = await db
-        .select()
-        .from(exerciseTutorials)
-        .where(eq(exerciseTutorials.id, input.exerciseId))
-        .limit(1);
-
-      return exercise[0];
+      const updated = await updateExerciseTutorialById(input.exerciseId, updateData);
+      if (!updated) throw new Error("Exercício não encontrado");
+      return updated;
     }),
 
   /**
@@ -112,13 +88,7 @@ export const exercisesRouter = router({
   delete: adminProcedure
     .input(z.object({ exerciseId: z.number() }))
     .mutation(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new Error("Database not available");
-
-      await db
-        .delete(exerciseTutorials)
-        .where(eq(exerciseTutorials.id, input.exerciseId));
-
-      return { success: true };
+      await deleteExerciseTutorialById(input.exerciseId);
+      return { success: true } as const;
     }),
 });

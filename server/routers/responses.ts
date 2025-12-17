@@ -4,16 +4,9 @@ import {
   getTodayResponse,
   getPatientResponses,
   getScoringConfigForQuiz,
-  getQuizById,
   getQuizWithQuestions,
-  getDb,
+  insertQuizResponse,
 } from "../db";
-import {
-  quizResponses,
-  quizResponseAnswers,
-  InsertQuizResponse,
-} from "../../drizzle/schema";
-import { eq, and } from "drizzle-orm";
 
 /**
  * Calculate score from quiz answers based on question weights and response values
@@ -102,9 +95,6 @@ export const responsesRouter = router({
         throw new Error("Only patients can submit quiz responses");
       }
 
-      const db = await getDb();
-      if (!db) throw new Error("Database not available");
-
       // Check if patient already responded today
       const existingResponse = await getTodayResponse(ctx.user.id, input.quizId);
       if (existingResponse) {
@@ -142,7 +132,7 @@ export const responsesRouter = router({
       const recommendation = getRecommendation(totalScore, scoringConfigs);
 
       // Create response
-      const responseData: InsertQuizResponse = {
+      const responseData = {
         userId: ctx.user.id,
         quizId: input.quizId,
         responseDate: new Date(),
@@ -151,26 +141,7 @@ export const responsesRouter = router({
         recommendedExerciseType: recommendation.recommendedExerciseType,
       };
 
-      const result = await db.insert(quizResponses).values(responseData);
-      const responseId = result[0].insertId as number;
-
-      // Store individual answers
-      for (const answer of input.answers) {
-        await db.insert(quizResponseAnswers).values({
-          responseId,
-          questionId: answer.questionId,
-          answerValue: answer.answerValue,
-        });
-      }
-
-      // Return the created response
-      const createdResponse = await db
-        .select()
-        .from(quizResponses)
-        .where(eq(quizResponses.id, responseId))
-        .limit(1);
-
-      return createdResponse[0];
+      return await insertQuizResponse(responseData);
     }),
 
   /**

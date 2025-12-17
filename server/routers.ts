@@ -1,5 +1,3 @@
-import { COOKIE_NAME } from "../shared/const";
-import { getSessionCookieOptions } from "./config/cookies";
 import { systemRouter } from "./api/systemRouter";
 import { publicProcedure, router } from "./api/trpc";
 import { patientsRouter } from "./routers/patients";
@@ -13,9 +11,7 @@ export const appRouter = router({
   system: systemRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+    logout: publicProcedure.mutation(() => {
       return {
         success: true,
       } as const;

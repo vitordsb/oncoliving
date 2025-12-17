@@ -1,7 +1,5 @@
 import { protectedProcedure, router } from "../api/trpc";
-import { getDb } from "../db";
-import { users } from "../../drizzle/schema";
-import { eq } from "drizzle-orm";
+import { updateUserById } from "../db";
 
 export const subscriptionsRouter = router({
   status: protectedProcedure.query(async ({ ctx }) => {
@@ -9,10 +7,9 @@ export const subscriptionsRouter = router({
   }),
 
   activate: protectedProcedure.mutation(async ({ ctx }) => {
-    const db = await getDb();
-    if (!db || !ctx.user) throw new Error("Banco de dados indisponível");
+    if (!ctx.user) throw new Error("Banco de dados indisponível");
 
-    await db.update(users).set({ hasActivePlan: true }).where(eq(users.id, ctx.user.id));
+    await updateUserById(ctx.user.id, { hasActivePlan: true });
 
     return { success: true, hasActivePlan: true };
   }),

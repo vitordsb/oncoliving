@@ -5,10 +5,8 @@ import {
   getPatientProfile,
   updatePatientProfile,
   getUserById,
-  getDb,
+  updateUserById,
 } from "../db";
-import { users, patientProfiles } from "../../drizzle/schema";
-import { eq } from "drizzle-orm";
 
 export const patientsRouter = router({
   /**
@@ -124,10 +122,8 @@ export const patientsRouter = router({
       if (!ctx.user || ctx.user.role !== "PATIENT") {
         throw new Error("Unauthorized");
       }
-      const db = await getDb();
-      if (!db) throw new Error("Database not available");
 
-      const observations = JSON.stringify({
+      const observations = {
         metastasis: input.metastasis,
         metastasisLocation: input.metastasisLocation,
         chemotherapy: input.chemotherapy,
@@ -151,25 +147,15 @@ export const patientsRouter = router({
         cancerType: input.cancerType,
         age: input.age,
         observations: input.observations,
+      };
+
+      await updatePatientProfile(ctx.user.id, {
+        mainDiagnosis: input.mainDiagnosis,
+        treatmentStage: input.treatmentStage,
+        observations,
       });
 
-      await db
-        .insert(patientProfiles)
-        .values({
-          userId: ctx.user.id,
-          mainDiagnosis: input.mainDiagnosis,
-          treatmentStage: input.treatmentStage,
-          observations,
-        })
-        .onDuplicateKeyUpdate({
-          set: {
-            mainDiagnosis: input.mainDiagnosis,
-            treatmentStage: input.treatmentStage,
-            observations,
-          },
-        });
-
-      await db.update(users).set({ hasCompletedAnamnesis: true }).where(eq(users.id, ctx.user.id));
+      await updateUserById(ctx.user.id, { hasCompletedAnamnesis: true });
 
       return { success: true, hasCompletedAnamnesis: true };
     }),

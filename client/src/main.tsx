@@ -5,7 +5,7 @@ import { httpBatchLink, TRPCClientError } from "@trpc/client";
 import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
-import { getLoginUrl } from "./const";
+import { AUTH_TOKEN_KEY, getLoginUrl } from "./const";
 import "./index.css";
 
 const queryClient = new QueryClient();
@@ -43,9 +43,22 @@ const trpcClient = trpc.createClient({
       url: "/api/trpc",
       transformer: superjson,
       fetch(input, init) {
+        const token = (() => {
+          try {
+            return localStorage.getItem(AUTH_TOKEN_KEY);
+          } catch {
+            return null;
+          }
+        })();
+
+        const headers = new Headers(init?.headers);
+        if (token) {
+          headers.set("Authorization", `Bearer ${token}`);
+        }
+
         return globalThis.fetch(input, {
           ...(init ?? {}),
-          credentials: "include",
+          headers,
         });
       },
     }),

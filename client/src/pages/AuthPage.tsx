@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { AUTH_TOKEN_KEY } from "@/const";
 
 export default function AuthPage() {
   const { isAuthenticated, loading } = useAuth();
@@ -73,6 +74,11 @@ export default function AuthPage() {
         setPassword("");
         setTermsAccepted(false);
         return;
+      }
+      if (data?.token) {
+        try {
+          localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+        } catch {}
       }
       window.location.href = "/";
     } catch (error: any) {

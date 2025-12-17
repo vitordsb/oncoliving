@@ -1,227 +1,291 @@
-import { eq, and, gte, desc } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
-import {
-  InsertUser,
-  users,
-  patientProfiles,
-  InsertPatientProfile,
-  quizzes,
-  quizQuestions,
-  quizQuestionOptions,
-  quizResponses,
-  quizResponseAnswers,
-  exerciseTutorials,
-  quizScoringConfig,
-} from "../drizzle/schema";
+import { MongoClient, type Db } from "mongodb";
 import { ENV } from "./config/env";
+import type {
+  ExerciseIntensity,
+  ExerciseTutorial,
+  PatientProfile,
+  Quiz,
+  QuizQuestion,
+  QuizQuestionOption,
+  QuizResponse,
+  QuizScoringConfig,
+  User,
+  UserRole,
+} from "../shared/types";
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __oncolivingMongoClientPromise: Promise<MongoClient> | undefined;
+  // eslint-disable-next-line no-var
+  var __oncolivingMongoIndexesPromise: Promise<void> | undefined;
+}
 
 const isTest = process.env.NODE_ENV === "test";
-const testPatientProfiles = new Map<number, any>();
-const testPatients: Record<number, any> = {
+
+// Minimal in-memory stubs used by unit tests when no DB is configured.
+const testPatientProfiles = new Map<number, PatientProfile>();
+const testUsersById: Record<number, User> = {
   2: {
     id: 2,
     openId: "patient-test-2",
     email: "patient2@test.local",
     name: "Test Patient 2",
+    passwordHash: null,
     role: "PATIENT",
     loginMethod: "local",
+    hasActivePlan: false,
+    hasCompletedAnamnesis: false,
     createdAt: new Date(),
     updatedAt: new Date(),
     lastSignedIn: new Date(),
   },
 };
 
-let _db: ReturnType<typeof drizzle> | null = null;
-
-// Lazily create the drizzle instance so local tooling can run without a DB.
-export async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
-    try {
-      _db = drizzle(process.env.DATABASE_URL);
-    } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
-      _db = null;
-    }
-  }
-  return _db;
-}
-
-export async function upsertUser(user: InsertUser): Promise<void> {
-  if (!user.openId) {
-    throw new Error("User openId is required for upsert");
-  }
-  if (!user.email) {
-    throw new Error("User email is required for upsert");
-  }
-
-  const db = await getDb();
-  if (!db) {
-    console.warn("[Database] Cannot upsert user: database not available");
-    return;
-  }
-
+function resolveDbNameFromUri(uri: string) {
   try {
-    const values: InsertUser = {
-      openId: user.openId,
-      email: user.email,
-    };
-    const updateSet: Record<string, unknown> = {};
-
-    const textFields = ["name", "loginMethod"] as const;
-    type TextField = (typeof textFields)[number];
-
-    const assignNullable = (field: TextField) => {
-      const value = user[field];
-      if (value === undefined) return;
-      const normalized = value ?? null;
-      values[field] = normalized;
-      updateSet[field] = normalized;
-    };
-
-    textFields.forEach(assignNullable);
-
-    if (user.lastSignedIn !== undefined) {
-      values.lastSignedIn = user.lastSignedIn;
-      updateSet.lastSignedIn = user.lastSignedIn;
-    }
-    if (user.hasActivePlan !== undefined) {
-      values.hasActivePlan = user.hasActivePlan;
-      updateSet.hasActivePlan = user.hasActivePlan;
-    }
-    if (user.hasCompletedAnamnesis !== undefined) {
-      values.hasCompletedAnamnesis = user.hasCompletedAnamnesis;
-      updateSet.hasCompletedAnamnesis = user.hasCompletedAnamnesis;
-    }
-    if (user.role !== undefined) {
-      values.role = user.role;
-      updateSet.role = user.role;
-    } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'ONCOLOGIST';
-      updateSet.role = 'ONCOLOGIST';
-    } else {
-      values.role = 'PATIENT';
-      updateSet.role = 'PATIENT';
-    }
-
-    if (!values.lastSignedIn) {
-      values.lastSignedIn = new Date();
-    }
-
-    if (Object.keys(updateSet).length === 0) {
-      updateSet.lastSignedIn = new Date();
-    }
-    updateSet.email = user.email;
-
-    await db.insert(users).values(values).onDuplicateKeyUpdate({
-      set: updateSet,
-    });
-  } catch (error) {
-    console.error("[Database] Failed to upsert user:", error);
-    throw error;
+    const url = new URL(uri);
+    const pathname = url.pathname?.replace(/^\//, "") ?? "";
+    return pathname || undefined;
+  } catch {
+    return undefined;
   }
 }
 
-export async function getUserByOpenId(openId: string) {
-  const db = await getDb();
-  if (!db) {
-    console.warn("[Database] Cannot get user: database not available");
-    return undefined;
+export async function getDb(): Promise<Db | null> {
+  if (!ENV.mongoUri) return null;
+
+  if (!globalThis.__oncolivingMongoClientPromise) {
+    const client = new MongoClient(ENV.mongoUri);
+    globalThis.__oncolivingMongoClientPromise = client.connect();
   }
 
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  const client = await globalThis.__oncolivingMongoClientPromise;
+  const dbName = ENV.mongoDbName || resolveDbNameFromUri(ENV.mongoUri) || "oncoliving";
+  const db = client.db(dbName);
 
-  return result.length > 0 ? result[0] : undefined;
-}
-
-export async function getUserByEmail(email: string) {
-  const db = await getDb();
-  if (!db) {
-    console.warn("[Database] Cannot get user by email: database not available");
-    return undefined;
+  if (!globalThis.__oncolivingMongoIndexesPromise) {
+    globalThis.__oncolivingMongoIndexesPromise = ensureMongoIndexes(db);
   }
+  await globalThis.__oncolivingMongoIndexesPromise;
 
-  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  return result.length > 0 ? result[0] : undefined;
+  return db;
 }
 
-export async function getUserById(id: number) {
-  const db = await getDb();
-  if (!db) {
-    if (isTest) {
-      return testPatients[id];
+async function ensureMongoIndexes(db: Db) {
+  const safeCreate = async (fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+    } catch (error) {
+      console.warn("[Database] Failed to create index:", error);
     }
-    console.warn("[Database] Cannot get user: database not available");
+  };
+
+  await safeCreate(() => db.collection("users").createIndex({ id: 1 }, { unique: true }));
+  await safeCreate(() => db.collection("users").createIndex({ email: 1 }, { unique: true }));
+  await safeCreate(() => db.collection("users").createIndex({ openId: 1 }, { unique: true }));
+
+  await safeCreate(() => db.collection("patient_profiles").createIndex({ id: 1 }, { unique: true }));
+  await safeCreate(() => db.collection("patient_profiles").createIndex({ userId: 1 }, { unique: true }));
+
+  await safeCreate(() => db.collection("quizzes").createIndex({ id: 1 }, { unique: true }));
+  await safeCreate(() => db.collection("quizzes").createIndex({ isActive: 1 }));
+
+  await safeCreate(() => db.collection("quiz_responses").createIndex({ id: 1 }, { unique: true }));
+  await safeCreate(() =>
+    db.collection("quiz_responses").createIndex({ userId: 1, quizId: 1, responseDate: -1 })
+  );
+
+  await safeCreate(() => db.collection("exercise_tutorials").createIndex({ id: 1 }, { unique: true }));
+  await safeCreate(() => db.collection("exercise_tutorials").createIndex({ intensityLevel: 1 }));
+}
+
+async function getNextId(db: Db, sequenceName: string): Promise<number> {
+  const result = await db.collection<{ _id: string; seq: number }>("counters").findOneAndUpdate(
+    { _id: sequenceName },
+    { $inc: { seq: 1 } },
+    { upsert: true, returnDocument: "after" }
+  );
+
+  return result?.seq ?? 1;
+}
+
+function nowDates() {
+  const now = new Date();
+  return { now, now2: now }; // avoid double Date allocations on hot paths
+}
+
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+export async function getUserByOpenId(openId: string): Promise<User | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const user = await db.collection<User>("users").findOne({ openId }, { projection: { _id: 0 } as any });
+  return user ?? undefined;
+}
+
+export async function getUserByEmail(email: string): Promise<User | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const normalized = normalizeEmail(email);
+  const user = await db
+    .collection<User>("users")
+    .findOne({ email: normalized }, { projection: { _id: 0 } as any });
+  return user ?? undefined;
+}
+
+export async function getUserById(id: number): Promise<User | undefined> {
+  const db = await getDb();
+  if (!db) {
+    if (isTest) return testUsersById[id];
     return undefined;
   }
 
-  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  const user = await db.collection<User>("users").findOne({ id }, { projection: { _id: 0 } as any });
+  return user ?? undefined;
+}
 
-  return result.length > 0 ? result[0] : undefined;
+export async function createUser(input: {
+  openId: string;
+  email: string;
+  name: string;
+  passwordHash: string;
+  role: UserRole;
+  loginMethod: string;
+  hasActivePlan: boolean;
+  hasCompletedAnamnesis: boolean;
+}): Promise<User> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const { now } = nowDates();
+  const id = await getNextId(db, "users");
+  const user: User = {
+    id,
+    openId: input.openId,
+    email: normalizeEmail(input.email),
+    name: input.name,
+    passwordHash: input.passwordHash,
+    role: input.role,
+    loginMethod: input.loginMethod,
+    hasActivePlan: input.hasActivePlan,
+    hasCompletedAnamnesis: input.hasCompletedAnamnesis,
+    createdAt: now,
+    updatedAt: now,
+    lastSignedIn: now,
+  };
+
+  await db.collection<User>("users").insertOne(user as any);
+  return user;
+}
+
+export async function updateUserById(
+  id: number,
+  update: Partial<Pick<User, "name" | "hasActivePlan" | "hasCompletedAnamnesis" | "lastSignedIn">>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  const { now } = nowDates();
+  await db.collection<User>("users").updateOne(
+    { id },
+    {
+      $set: {
+        ...update,
+        updatedAt: now,
+      },
+    }
+  );
 }
 
 /**
  * Patient-related queries
  */
-export async function getPatientProfile(userId: number) {
+export async function getPatientProfile(userId: number): Promise<PatientProfile | undefined> {
   const db = await getDb();
   if (!db) {
-    if (isTest) {
-      return testPatientProfiles.get(userId);
-    }
+    if (isTest) return testPatientProfiles.get(userId);
     return undefined;
   }
 
-  const result = await db
-    .select()
-    .from(patientProfiles)
-    .where(eq(patientProfiles.userId, userId))
-    .limit(1);
-
-  return result.length > 0 ? result[0] : undefined;
+  const profile = await db
+    .collection<PatientProfile>("patient_profiles")
+    .findOne({ userId }, { projection: { _id: 0 } as any });
+  return profile ?? undefined;
 }
 
-export async function getAllPatients() {
+export async function getAllPatients(): Promise<Array<Pick<User, "id" | "name" | "email" | "createdAt">>> {
   const db = await getDb();
   if (!db) return [];
 
-  return await db
-    .select()
-    .from(users)
-    .where(eq(users.role, 'PATIENT'));
+  const patients = await db
+    .collection<User>("users")
+    .find({ role: "PATIENT" })
+    .project({ _id: 0, id: 1, name: 1, email: 1, createdAt: 1 })
+    .toArray();
+
+  return patients as any;
 }
 
 export async function updatePatientProfile(
   userId: number,
-  data: Partial<InsertPatientProfile>
-) {
+  data: Partial<Pick<PatientProfile, "mainDiagnosis" | "treatmentStage" | "dateOfBirth" | "gender" | "observations">>
+): Promise<PatientProfile | undefined> {
   const db = await getDb();
   if (!db) {
     if (isTest) {
-      const existing = testPatientProfiles.get(userId) || {};
-      const updated = { ...existing, userId, ...data };
-      testPatientProfiles.set(userId, updated);
-      return updated;
+      const existing = testPatientProfiles.get(userId);
+      const { now } = nowDates();
+      const next: PatientProfile = {
+        id: existing?.id ?? 1,
+        userId,
+        mainDiagnosis: existing?.mainDiagnosis ?? null,
+        treatmentStage: existing?.treatmentStage ?? null,
+        dateOfBirth: existing?.dateOfBirth ?? null,
+        gender: existing?.gender ?? null,
+        observations: existing?.observations ?? null,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        ...data,
+      } as any;
+      testPatientProfiles.set(userId, next);
+      return next;
     }
     return undefined;
   }
 
-  // First check if profile exists
   const existing = await getPatientProfile(userId);
+  const { now } = nowDates();
+
   if (!existing) {
-    // Create new profile
-    const newProfile: InsertPatientProfile = {
+    const id = await getNextId(db, "patient_profiles");
+    const created: PatientProfile = {
+      id,
       userId,
-      ...data,
+      mainDiagnosis: data.mainDiagnosis ?? null,
+      treatmentStage: data.treatmentStage ?? null,
+      dateOfBirth: (data.dateOfBirth as any) ?? null,
+      gender: data.gender ?? null,
+      observations: (data.observations as any) ?? null,
+      createdAt: now,
+      updatedAt: now,
     };
-    await db.insert(patientProfiles).values(newProfile);
-    return await getPatientProfile(userId);
+    await db.collection<PatientProfile>("patient_profiles").insertOne(created as any);
+    return created;
   }
 
-  // Update existing profile
-  await db
-    .update(patientProfiles)
-    .set(data)
-    .where(eq(patientProfiles.userId, userId));
+  await db.collection<PatientProfile>("patient_profiles").updateOne(
+    { userId },
+    {
+      $set: {
+        ...data,
+        updatedAt: now,
+      },
+    }
+  );
 
   return await getPatientProfile(userId);
 }
@@ -229,65 +293,191 @@ export async function updatePatientProfile(
 /**
  * Quiz-related queries
  */
-export async function getActiveQuiz() {
+export async function getActiveQuiz(): Promise<Quiz | undefined> {
   const db = await getDb();
   if (!db) return undefined;
 
-  const result = await db
-    .select()
-    .from(quizzes)
-    .where(eq(quizzes.isActive, true))
-    .limit(1);
+  let quiz = (await db
+    .collection<Quiz>("quizzes")
+    .findOne({ isActive: true }, { projection: { _id: 0 } as any })) as unknown as Quiz | null;
+  if (quiz) return quiz;
 
-  return result.length > 0 ? result[0] : undefined;
+  // Auto-create a default active quiz so the app works out-of-the-box.
+  quiz = await createDefaultQuiz(db);
+  return quiz;
 }
 
-export async function getQuizById(quizId: number) {
+export async function getQuizById(quizId: number): Promise<Quiz | undefined> {
   const db = await getDb();
   if (!db) return undefined;
 
-  const result = await db
-    .select()
-    .from(quizzes)
-    .where(eq(quizzes.id, quizId))
-    .limit(1);
-
-  return result.length > 0 ? result[0] : undefined;
+  const quiz = await db.collection<Quiz>("quizzes").findOne({ id: quizId }, { projection: { _id: 0 } as any });
+  return quiz ?? undefined;
 }
 
-export async function getAllQuizzes() {
+export async function getAllQuizzes(): Promise<Quiz[]> {
   const db = await getDb();
   if (!db) return [];
 
-  return await db.select().from(quizzes);
+  const quizzes = await db.collection<Quiz>("quizzes").find({}).project({ _id: 0 }).toArray();
+  return quizzes as any;
 }
 
-export async function getQuizWithQuestions(quizId: number) {
+export async function createQuiz(input: {
+  name: string;
+  description?: string;
+  isActive: boolean;
+  createdBy: number;
+}): Promise<Quiz> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const { now } = nowDates();
+  const id = await getNextId(db, "quizzes");
+
+  if (input.isActive) {
+    await db
+      .collection<Quiz>("quizzes")
+      .updateMany({ isActive: true }, { $set: { isActive: false, updatedAt: now } as any });
+  }
+
+  const quiz: Quiz = {
+    id,
+    name: input.name,
+    description: input.description ?? null,
+    isActive: input.isActive,
+    createdBy: input.createdBy,
+    createdAt: now,
+    updatedAt: now,
+    questions: [],
+    scoringConfig: [],
+  };
+
+  await db.collection<Quiz>("quizzes").insertOne(quiz as any);
+  return quiz;
+}
+
+export async function updateQuizById(
+  quizId: number,
+  update: Partial<Pick<Quiz, "name" | "description" | "isActive">>
+): Promise<Quiz | undefined> {
   const db = await getDb();
   if (!db) return undefined;
 
+  const { now } = nowDates();
+
+  if (update.isActive === true) {
+    await db.collection<Quiz>("quizzes").updateMany(
+      { id: { $ne: quizId } as any, isActive: true },
+      { $set: { isActive: false, updatedAt: now } as any }
+    );
+  }
+
+  const set: Record<string, unknown> = { updatedAt: now };
+  if (update.name !== undefined) set.name = update.name;
+  if (update.description !== undefined) set.description = update.description;
+  if (update.isActive !== undefined) set.isActive = update.isActive;
+
+  const result = await db.collection<Quiz>("quizzes").updateOne({ id: quizId }, { $set: set as any });
+  if (!result.matchedCount) return undefined;
+
+  return await getQuizById(quizId);
+}
+
+export async function createQuizQuestion(input: {
+  quizId: number;
+  text: string;
+  questionType: QuizQuestion["questionType"];
+  weight: string;
+  order: number;
+}): Promise<QuizQuestion> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const { now } = nowDates();
+  const id = await getNextId(db, "quiz_questions");
+  const question: QuizQuestion = {
+    id,
+    quizId: input.quizId,
+    text: input.text,
+    questionType: input.questionType,
+    weight: input.weight,
+    order: input.order,
+    options: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const result = await db.collection<Quiz>("quizzes").updateOne(
+    { id: input.quizId },
+    {
+      $push: { questions: question as any },
+      $set: { updatedAt: now } as any,
+    }
+  );
+
+  if (!result.matchedCount) {
+    throw new Error("Quiz not found");
+  }
+
+  return question;
+}
+
+export async function updateQuizQuestionById(
+  questionId: number,
+  update: Partial<Pick<QuizQuestion, "text" | "weight" | "order">>
+): Promise<QuizQuestion | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const { now } = nowDates();
+  const set: Record<string, unknown> = {
+    updatedAt: now,
+    "questions.$.updatedAt": now,
+  };
+  if (update.text !== undefined) set["questions.$.text"] = update.text;
+  if (update.weight !== undefined) set["questions.$.weight"] = update.weight;
+  if (update.order !== undefined) set["questions.$.order"] = update.order;
+
+  const result = await db
+    .collection<Quiz>("quizzes")
+    .updateOne({ "questions.id": questionId } as any, { $set: set as any });
+
+  if (!result.matchedCount) return undefined;
+
+  const quiz = await db
+    .collection<Pick<Quiz, "questions">>("quizzes")
+    .findOne({ "questions.id": questionId } as any, { projection: { _id: 0, questions: 1 } as any });
+
+  return quiz?.questions?.find((q: QuizQuestion) => q.id === questionId);
+}
+
+export async function deleteQuizQuestionById(questionId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+
+  const { now } = nowDates();
+  const result = await db.collection<Quiz>("quizzes").updateOne(
+    { "questions.id": questionId } as any,
+    {
+      $pull: { questions: { id: questionId } as any },
+      $set: { updatedAt: now } as any,
+    }
+  );
+
+  return result.modifiedCount > 0;
+}
+
+export async function getQuizWithQuestions(quizId: number): Promise<(Quiz & { questions: QuizQuestion[] }) | undefined> {
   const quiz = await getQuizById(quizId);
   if (!quiz) return undefined;
 
-  const questions = await db
-    .select()
-    .from(quizQuestions)
-    .where(eq(quizQuestions.quizId, quizId))
-    .orderBy(quizQuestions.order);
+  const questions = (quiz.questions ?? []).slice().sort((a, b) => a.order - b.order).map((q) => ({
+    ...q,
+    options: (q.options ?? []).slice().sort((a, b) => a.order - b.order),
+  }));
 
-  // Get options for each question
-  const questionsWithOptions = await Promise.all(
-    questions.map(async (q) => {
-      const options = await db
-        .select()
-        .from(quizQuestionOptions)
-        .where(eq(quizQuestionOptions.questionId, q.id))
-        .orderBy(quizQuestionOptions.order);
-      return { ...q, options };
-    })
-  );
-
-  return { ...quiz, questions: questionsWithOptions };
+  return { ...quiz, questions };
 }
 
 type DefaultQuestion = {
@@ -379,115 +569,336 @@ const BASELINE_QUESTIONS: DefaultQuestion[] = [
   },
 ];
 
-/**
- * Ensures the active quiz has the baseline set of questions (up to 10),
- * inserting any missing ones without duplicating existing texts.
- */
-export async function ensureBaselineQuizQuestions(quizId: number) {
-  const db = await getDb();
-  if (!db) return;
+const DEFAULT_SCORING: Array<Pick<QuizScoringConfig, "minScore" | "maxScore" | "isGoodDay" | "recommendedExerciseType" | "exerciseDescription">> =
+  [
+    {
+      minScore: "0",
+      maxScore: "20",
+      isGoodDay: false,
+      recommendedExerciseType: "Dia de descanso",
+      exerciseDescription: "Hoje não é um bom dia para exercícios. Foque em descanso e recuperação.",
+    },
+    {
+      minScore: "20",
+      maxScore: "40",
+      isGoodDay: true,
+      recommendedExerciseType: "Descanso ativo",
+      exerciseDescription: "Movimentos leves como caminhada devagar ou alongamentos são recomendados.",
+    },
+    {
+      minScore: "40",
+      maxScore: "60",
+      isGoodDay: true,
+      recommendedExerciseType: "Exercício leve",
+      exerciseDescription: "Caminhada leve ou alongamentos suaves por 15 a 20 minutos.",
+    },
+    {
+      minScore: "60",
+      maxScore: "100",
+      isGoodDay: true,
+      recommendedExerciseType: "Exercício moderado",
+      exerciseDescription: "Você pode fazer exercícios moderados como caminhada acelerada ou treino de força leve.",
+    },
+  ];
 
-  const existingQuestions = await db
-    .select({ id: quizQuestions.id, text: quizQuestions.text })
-    .from(quizQuestions)
-    .where(eq(quizQuestions.quizId, quizId));
+async function createDefaultQuiz(db: Db): Promise<Quiz> {
+  const { now } = nowDates();
+  const quizId = await getNextId(db, "quizzes");
 
-  const existingTexts = new Set(existingQuestions.map(q => q.text));
-
+  const questions: QuizQuestion[] = [];
   for (const q of BASELINE_QUESTIONS) {
-    if (existingTexts.has(q.text)) continue;
+    const questionId = await getNextId(db, "quiz_questions");
+    const options: QuizQuestionOption[] = [];
+    if (q.options?.length) {
+      for (const opt of q.options) {
+        options.push({
+          id: await getNextId(db, "quiz_question_options"),
+          text: opt.text,
+          scoreValue: opt.scoreValue,
+          order: opt.order,
+          createdAt: now,
+        });
+      }
+    }
 
-    const insertResult = await db.insert(quizQuestions).values({
+    questions.push({
+      id: questionId,
       quizId,
       text: q.text,
       questionType: q.questionType,
       weight: q.weight,
       order: q.order,
+      options,
+      createdAt: now,
+      updatedAt: now,
     });
-    const questionId = insertResult[0].insertId as number;
+  }
 
+  const scoringConfig: QuizScoringConfig[] = [];
+  for (const sc of DEFAULT_SCORING) {
+    scoringConfig.push({
+      id: await getNextId(db, "quiz_scoring_config"),
+      quizId,
+      minScore: sc.minScore,
+      maxScore: sc.maxScore,
+      isGoodDay: sc.isGoodDay,
+      recommendedExerciseType: sc.recommendedExerciseType,
+      exerciseDescription: sc.exerciseDescription ?? null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  const quiz: Quiz = {
+    id: quizId,
+    name: "Check de Bem-Estar Diário",
+    description:
+      "Avaliação rápida para saber se é um bom dia para se exercitar e qual atividade fazer",
+    isActive: true,
+    createdBy: null,
+    createdAt: now,
+    updatedAt: now,
+    questions,
+    scoringConfig,
+  };
+
+  await db.collection<Quiz>("quizzes").insertOne(quiz as any);
+  return quiz;
+}
+
+export async function ensureBaselineQuizQuestions(quizId: number) {
+  const db = await getDb();
+  if (!db) return;
+
+  const quiz = await getQuizById(quizId);
+  if (!quiz) return;
+
+  const existingTexts = new Set((quiz.questions ?? []).map((q) => q.text));
+  const missing = BASELINE_QUESTIONS.filter((q) => !existingTexts.has(q.text));
+  if (!missing.length) return;
+
+  const { now } = nowDates();
+  const newQuestions: QuizQuestion[] = [];
+
+  for (const q of missing) {
+    const questionId = await getNextId(db, "quiz_questions");
+    const options: QuizQuestionOption[] = [];
     if (q.options?.length) {
-      await db.insert(quizQuestionOptions).values(
-        q.options.map(opt => ({
-          questionId,
+      for (const opt of q.options) {
+        options.push({
+          id: await getNextId(db, "quiz_question_options"),
           text: opt.text,
           scoreValue: opt.scoreValue,
           order: opt.order,
-        }))
-      );
+          createdAt: now,
+        });
+      }
     }
+    newQuestions.push({
+      id: questionId,
+      quizId,
+      text: q.text,
+      questionType: q.questionType,
+      weight: q.weight,
+      order: q.order,
+      options,
+      createdAt: now,
+      updatedAt: now,
+    });
   }
+
+  await db.collection<Quiz>("quizzes").updateOne(
+    { id: quizId },
+    {
+      $push: { questions: { $each: newQuestions } as any },
+      $set: { updatedAt: now },
+    }
+  );
+}
+
+export async function getScoringConfigForQuiz(quizId: number): Promise<QuizScoringConfig[]> {
+  const quiz = await getQuizById(quizId);
+  return (quiz?.scoringConfig ?? []) as any;
 }
 
 /**
  * Quiz Response queries
  */
-export async function getTodayResponse(userId: number, quizId: number) {
+export async function getTodayResponse(userId: number, quizId: number): Promise<QuizResponse | undefined> {
   const db = await getDb();
   if (!db) return undefined;
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const result = await db
-    .select()
-    .from(quizResponses)
-    .where(
-      and(
-        eq(quizResponses.userId, userId),
-        eq(quizResponses.quizId, quizId),
-        gte(quizResponses.responseDate, today)
-      )
-    )
-    .limit(1);
+  const response = await db
+    .collection<QuizResponse>("quiz_responses")
+    .findOne({ userId, quizId, responseDate: { $gte: today } as any }, { projection: { _id: 0 } as any });
 
-  return result.length > 0 ? result[0] : undefined;
+  return response ?? undefined;
 }
 
-export async function getPatientResponses(userId: number, limit: number = 30) {
+export async function getPatientResponses(userId: number, limit: number = 30): Promise<QuizResponse[]> {
   const db = await getDb();
   if (!db) return [];
 
-  return await db
-    .select()
-    .from(quizResponses)
-    .where(eq(quizResponses.userId, userId))
-    .orderBy(desc(quizResponses.responseDate))
-    .limit(limit);
+  const responses = await db
+    .collection<QuizResponse>("quiz_responses")
+    .find({ userId })
+    .project({ _id: 0 })
+    .sort({ responseDate: -1 })
+    .limit(limit)
+    .toArray();
+
+  return responses as any;
+}
+
+export async function insertQuizResponse(input: Omit<QuizResponse, "id" | "createdAt" | "updatedAt">): Promise<QuizResponse> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const { now } = nowDates();
+  const id = await getNextId(db, "quiz_responses");
+  const response: QuizResponse = {
+    id,
+    ...input,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await db.collection<QuizResponse>("quiz_responses").insertOne(response as any);
+  return response;
 }
 
 /**
  * Exercise queries
  */
-export async function getAllExercises() {
+const BASELINE_EXERCISES: Array<Omit<ExerciseTutorial, "id" | "createdAt" | "updatedAt">> = [
+  {
+    name: "Caminhada leve",
+    description: "Caminhada confortável por 10–20 minutos, respeitando seus limites.",
+    intensityLevel: "LIGHT",
+    safetyGuidelines: "Hidrate-se. Pare se sentir tontura, falta de ar ou dor incomum.",
+    videoLink: null,
+  },
+  {
+    name: "Alongamento suave",
+    description: "Alongamentos leves para mobilidade e rigidez (5–10 minutos).",
+    intensityLevel: "LIGHT",
+    safetyGuidelines: "Não force. Mantenha cada posição por 20–30 segundos.",
+    videoLink: null,
+  },
+  {
+    name: "Força leve (sentada)",
+    description: "Exercícios com elástico leve ou peso do corpo, com pausas frequentes (8–12 min).",
+    intensityLevel: "MODERATE",
+    safetyGuidelines: "Priorize técnica. Interrompa se houver dor ou falta de ar intensa.",
+    videoLink: null,
+  },
+  {
+    name: "Cardio moderado controlado",
+    description: "Marcha no lugar/caminhada com fala confortável (10–15 min).",
+    intensityLevel: "MODERATE",
+    safetyGuidelines: "Mantenha esforço leve/moderado e pare se sentir sintomas incomuns.",
+    videoLink: null,
+  },
+  {
+    name: "Circuito funcional (moderado)",
+    description: "Sequência curta de força e mobilidade (10–15 min), sem impacto.",
+    intensityLevel: "STRONG",
+    safetyGuidelines: "Evite impacto. Faça pausas. Pare se houver dor, tontura ou falta de ar.",
+    videoLink: null,
+  },
+];
+
+async function ensureBaselineExercises(db: Db) {
+  const count = await db.collection("exercise_tutorials").countDocuments();
+  if (count > 0) return;
+
+  const { now } = nowDates();
+  const docs: ExerciseTutorial[] = [];
+  for (const ex of BASELINE_EXERCISES) {
+    docs.push({
+      id: await getNextId(db, "exercise_tutorials"),
+      ...ex,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  if (docs.length) {
+    await db.collection<ExerciseTutorial>("exercise_tutorials").insertMany(docs as any);
+  }
+}
+
+export async function getAllExercises(): Promise<ExerciseTutorial[]> {
   const db = await getDb();
   if (!db) return [];
 
-  return await db.select().from(exerciseTutorials);
+  await ensureBaselineExercises(db);
+  const exercises = await db.collection<ExerciseTutorial>("exercise_tutorials").find({}).project({ _id: 0 }).toArray();
+  return exercises as any;
 }
 
-export async function getExercisesByIntensity(intensity: "LIGHT" | "MODERATE" | "STRONG") {
+export async function getExercisesByIntensity(intensity: ExerciseIntensity): Promise<ExerciseTutorial[]> {
   const db = await getDb();
   if (!db) return [];
 
-  return await db
-    .select()
-    .from(exerciseTutorials)
-    .where(eq(exerciseTutorials.intensityLevel, intensity));
+  await ensureBaselineExercises(db);
+  const exercises = await db
+    .collection<ExerciseTutorial>("exercise_tutorials")
+    .find({ intensityLevel: intensity })
+    .project({ _id: 0 })
+    .toArray();
+
+  return exercises as any;
 }
 
-/**
- * Scoring config queries
- */
-export async function getScoringConfigForQuiz(quizId: number) {
+export async function createExerciseTutorial(
+  input: Omit<ExerciseTutorial, "id" | "createdAt" | "updatedAt">
+): Promise<ExerciseTutorial> {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) throw new Error("Database not available");
 
-  return await db
-    .select()
-    .from(quizScoringConfig)
-    .where(eq(quizScoringConfig.quizId, quizId))
-    .orderBy(quizScoringConfig.minScore as any);
+  const { now } = nowDates();
+  const id = await getNextId(db, "exercise_tutorials");
+  const exercise: ExerciseTutorial = { id, ...input, createdAt: now, updatedAt: now };
+
+  await db.collection<ExerciseTutorial>("exercise_tutorials").insertOne(exercise as any);
+  return exercise;
 }
 
-// TODO: add feature queries here as your schema grows.
+export async function updateExerciseTutorialById(
+  exerciseId: number,
+  update: Partial<Pick<ExerciseTutorial, "name" | "description" | "intensityLevel" | "safetyGuidelines" | "videoLink">>
+): Promise<ExerciseTutorial | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const { now } = nowDates();
+  const set: Record<string, unknown> = { updatedAt: now };
+  if (update.name !== undefined) set.name = update.name;
+  if (update.description !== undefined) set.description = update.description;
+  if (update.intensityLevel !== undefined) set.intensityLevel = update.intensityLevel;
+  if (update.safetyGuidelines !== undefined) set.safetyGuidelines = update.safetyGuidelines;
+  if (update.videoLink !== undefined) set.videoLink = update.videoLink;
+
+  const result = await db
+    .collection<ExerciseTutorial>("exercise_tutorials")
+    .updateOne({ id: exerciseId }, { $set: set as any });
+
+  if (!result.matchedCount) return undefined;
+
+  return (
+    (await db
+      .collection<ExerciseTutorial>("exercise_tutorials")
+      .findOne({ id: exerciseId }, { projection: { _id: 0 } as any })) ?? undefined
+  );
+}
+
+export async function deleteExerciseTutorialById(exerciseId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+
+  const result = await db.collection<ExerciseTutorial>("exercise_tutorials").deleteOne({ id: exerciseId });
+  return result.deletedCount > 0;
+}
