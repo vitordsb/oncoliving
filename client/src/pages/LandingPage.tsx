@@ -194,11 +194,6 @@ export default function LandingPage() {
                       respeitando o momento do corpo e a atual fase do seu tratamento.
                     </p>
                   </div>
-                  <div className="mt-6 flex flex-wrap gap-3">
-                    <Badge className="bg-white/20 border-white/30 text-white">Onco-personal</Badge>
-                    <Badge className="bg-white/20 border-white/30 text-white">Evidências científicas</Badge>
-                    <Badge className="bg-white/20 border-white/30 text-white">Cuidado humanizado</Badge>
-                  </div>
                 </div>
               </CardContent>
             </Card>
