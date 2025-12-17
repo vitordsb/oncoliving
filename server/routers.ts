@@ -1,4 +1,4 @@
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME } from "../shared/const";
 import { getSessionCookieOptions } from "./config/cookies";
 import { systemRouter } from "./api/systemRouter";
 import { publicProcedure, router } from "./api/trpc";

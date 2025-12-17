@@ -12,7 +12,7 @@ export default function PatientDashboard() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
 
-  const needsAnamnesis = user && user.role === "PATIENT" && user.hasCompletedAnamnesis === false;
+  const needsAnamnesis = user?.role === "PATIENT" && user?.hasCompletedAnamnesis === false;
 
   // Get active quiz
   const { data: activeQuiz, isLoading: quizLoading } = trpc.quizzes.getActive.useQuery();
