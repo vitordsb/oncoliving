@@ -49,7 +49,7 @@ export default function AdminDashboard() {
       <header className="border-b border-pink-100 bg-white/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Admin OncoLiving</h1>
+            <h1 className="text-2xl font-bold text-gray-900">Admin Movimento para Cura</h1>
             <p className="text-sm text-gray-600">Bem-vindo, {user.name}</p>
           </div>
           <Button

@@ -143,7 +143,7 @@ export default function LandingPage() {
         <section className="grid gap-10 lg:grid-cols-2 items-center">
           <div className="space-y-6">
             <Badge className="bg-pink-100 text-pink-700 border-pink-200 w-fit px-3 py-1 text-sm font-semibold">
-              OncoLiving por Andressa Semionatto
+              Por Andressa Semionatto
             </Badge>
             <h1 className="text-5xl sm:text-6xl font-bold text-gray-900 leading-tight">Movimento para Cura</h1>
             <p className="text-xl text-gray-900 font-semibold">

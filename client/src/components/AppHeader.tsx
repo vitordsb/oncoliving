@@ -28,7 +28,7 @@ export function AppHeader({ showBack = false, onBack }: AppHeaderProps) {
               ←
             </Button>
           )}
-          <h1 className="text-xl font-bold text-pink-600">OncoLiving</h1>
+          <h1 className="text-xl font-bold text-pink-600">Movimento para Cura</h1>
         </div>
         {user ? (
           <DropdownMenu>

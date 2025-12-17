@@ -111,9 +111,9 @@ export default function AuthPage() {
           <div className="flex items-center gap-3">
             <Heart className="w-8 h-8 text-pink-600" />
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">OncoLiving</h1>
+              <h1 className="text-2xl font-bold text-gray-900">Movimento para Cura</h1>
               <p className="text-xs text-gray-600">
-                A OncoLiving foi desenvolvido pela Andressa Semionatto
+                O Movimento para Cura foi desenvolvido pela Andressa Semionatto
               </p>
             </div>
           </div>
@@ -171,7 +171,7 @@ export default function AuthPage() {
               </CardTitle>
               <CardDescription className="text-base">
                 {isRegister
-                  ? "Preencha seus dados para começar a usar o OncoLiving"
+                  ? "Preencha seus dados para começar a usar o Movimento para Cura"
                   : "Acesse com seu email e senha para continuar"}
               </CardDescription>
               <div className="flex items-center justify-center gap-2 pt-2">
@@ -202,7 +202,7 @@ export default function AuthPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-gray-600 text-center">
-                O OncoLiving ajuda você a saber se hoje é um bom dia para se exercitar e traz
+                O Movimento para Cura ajuda você a saber se hoje é um bom dia para se exercitar e traz
                 recomendações personalizadas com base em como você está se sentindo.
               </p>
 
@@ -303,7 +303,7 @@ export default function AuthPage() {
 
               <div className="text-xs text-gray-500 text-center">
                 <p>
-                  Ao entrar, você concorda em usar o OncoLiving como ferramenta de apoio sob a
+                  Ao entrar, você concorda em usar o Movimento para Cura como ferramenta de apoio sob a
                   orientação do seu oncologista.
                 </p>
               </div>
@@ -341,7 +341,7 @@ export default function AuthPage() {
       <footer className="border-t border-gray-200 bg-white/50 backdrop-blur-sm">
         <div className="max-w-6xl mx-auto px-4 py-6 text-center text-sm text-gray-600">
           <p>
-            OncoLiving é uma ferramenta de apoio para ajudar pacientes oncológicos a gerenciar sua
+            Movimento para Cura é uma ferramenta de apoio para ajudar pacientes oncológicos a gerenciar sua
             rotina de exercícios. Sempre siga as orientações do seu oncologista.
           </p>
         </div>
